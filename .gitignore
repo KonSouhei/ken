@@ -8,3 +8,16 @@
 *.tiff
 *.txt
 *.xz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+*.pyd
+# Large files
+*.tar.xz
+*.tar
+*.zip
+*.pth
+*.pt
