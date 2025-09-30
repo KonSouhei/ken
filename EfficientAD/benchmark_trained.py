@@ -28,8 +28,8 @@ def load_trained_models(model_dir, out_channels=384):
 
     return teacher, student, autoencoder
 
-def load_bottle_images(data_dir, max_images=83):
-    """bottleテスト画像を読み込み"""
+def load_test_images(data_dir, category='bottle', max_images=83):
+    """テスト画像を読み込み"""
     transform = transforms.Compose([
         transforms.Resize((256, 256)),
         transforms.ToTensor(),
@@ -39,7 +39,7 @@ def load_bottle_images(data_dir, max_images=83):
     images = []
 
     # 正常画像
-    good_dir = os.path.join(data_dir, 'bottle', 'test', 'good')
+    good_dir = os.path.join(data_dir, category, 'test', 'good')
     if os.path.exists(good_dir):
         for img_file in os.listdir(good_dir)[:max_images//4]:
             img_path = os.path.join(good_dir, img_file)
@@ -48,27 +48,32 @@ def load_bottle_images(data_dir, max_images=83):
                 image = transform(image)
                 images.append(image)
 
-    # 異常画像も追加
-    for anomaly_type in ['broken_large', 'broken_small', 'contamination']:
-        anom_dir = os.path.join(data_dir, 'bottle', 'test', anomaly_type)
-        if os.path.exists(anom_dir):
-            for img_file in os.listdir(anom_dir):
-                img_path = os.path.join(anom_dir, img_file)
-                if img_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-                    image = Image.open(img_path).convert('RGB')
-                    image = transform(image)
-                    images.append(image)
+    # 異常画像も追加（全anomalyタイプを自動検出）
+    test_dir = os.path.join(data_dir, category, 'test')
+    if os.path.exists(test_dir):
+        for anomaly_type in os.listdir(test_dir):
+            if anomaly_type == 'good':
+                continue
+            anom_dir = os.path.join(test_dir, anomaly_type)
+            if os.path.isdir(anom_dir):
+                for img_file in os.listdir(anom_dir):
+                    img_path = os.path.join(anom_dir, img_file)
+                    if img_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                        image = Image.open(img_path).convert('RGB')
+                        image = transform(image)
+                        images.append(image)
 
     return images[:max_images]
 
-def detailed_inference_benchmark():
+def detailed_inference_benchmark(category='bottle'):
     """詳細な推論時間測定"""
     # GPU使用可能性確認
     gpu = torch.cuda.is_available()
     print(f"GPU available: {gpu}")
+    print(f"Category: {category}")
 
     # モデル読み込み
-    model_dir = './output/1/trainings/mvtec_ad/bottle'
+    model_dir = f'./output/1/trainings/mvtec_ad/{category}'
     teacher, student, autoencoder = load_trained_models(model_dir)
 
     # GPU設定
@@ -79,7 +84,7 @@ def detailed_inference_benchmark():
 
     # テスト画像読み込み
     data_dir = './mvtec-2'
-    images = load_bottle_images(data_dir)
+    images = load_test_images(data_dir, category)
     print(f"Loaded {len(images)} test images")
 
     if not images:
