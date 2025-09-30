@@ -98,14 +98,13 @@ def read_tiff(file_path_no_ext, exts=('.tif', '.tiff', '.TIF', '.TIFF')):
         if os.path.exists(file_path):
             file_paths.append(file_path)
 
+    # Remove duplicates (case-insensitive on Windows)
+    if len(file_paths) > 1:
+        file_paths = [file_paths[0]]
+
     if len(file_paths) == 0:
         raise FileNotFoundError('Could not find a file with a TIFF extension'
                                 f' at {file_path_no_ext}')
-    elif len(file_paths) > 1:
-        raise IOError('Found multiple files with a TIFF extension at'
-                      f' {file_path_no_ext}'
-                      '\nPlease specify which TIFF extension to use via the'
-                      ' `exts` parameter of this function.')
 
     return tiff.imread(file_paths[0])
 
