@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.models import Wide_ResNet101_2_Weights
 from tqdm import tqdm
-from common import (get_pdn_small, get_pdn_medium,
+from common import (get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck,
                     ImageFolderWithoutTarget, InfiniteDataloader)
 
 
@@ -23,11 +23,16 @@ def get_argparse():
         epilog='Text at the bottom of help')
     parser.add_argument('-o', '--output_folder',
                         default='output/pretraining/1/')
+    parser.add_argument('-m', '--model_size',
+                        choices=['small', 'medium', 'small_bottleneck'],
+                        default='small',
+                        help='Model size: small, medium, or small_bottleneck')
+    parser.add_argument('-d', '--data_path',
+                        default='./ILSVRC/Data/CLS-LOC/train',
+                        help='Path to ImageNet training data')
     return parser.parse_args()
 
 # variables
-model_size = 'small'
-imagenet_train_path = './ILSVRC/Data/CLS-LOC/train'
 seed = 42
 on_gpu = torch.cuda.is_available()
 device = 'cuda' if on_gpu else 'cpu'
@@ -56,8 +61,10 @@ def main():
     random.seed(seed)
 
     config = get_argparse()
+    model_size = config.model_size
+    imagenet_train_path = config.data_path
 
-    os.makedirs(config.output_folder)
+    os.makedirs(config.output_folder, exist_ok=True)
 
     backbone = torchvision.models.wide_resnet101_2(
         weights=Wide_ResNet101_2_Weights.IMAGENET1K_V1)
@@ -71,12 +78,15 @@ def main():
         pdn = get_pdn_small(out_channels, padding=True)
     elif model_size == 'medium':
         pdn = get_pdn_medium(out_channels, padding=True)
+    elif model_size == 'small_bottleneck':
+        pdn = get_pdn_small_bottleneck(out_channels, padding=False)
     else:
-        raise Exception()
+        raise Exception(f'Unknown model_size: {model_size}')
 
     train_set = ImageFolderWithoutTarget(imagenet_train_path,
                                          transform=train_transform)
-    train_loader = DataLoader(train_set, batch_size=16, shuffle=True,
+    #バッチサイズ
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=True,
                               num_workers=7, pin_memory=True)
     train_loader = InfiniteDataloader(train_loader)
 
@@ -97,6 +107,7 @@ def main():
         target = extractor.embed(image_fe)
         target = (target - channel_mean) / channel_std
         prediction = pdn(image_pdn)
+        prediction = F.interpolate(prediction, size=(64, 64), mode='bilinear', align_corners=False)
         loss = torch.mean((target - prediction)**2)
 
         optimizer.zero_grad()
