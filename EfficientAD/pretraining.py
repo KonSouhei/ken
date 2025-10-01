@@ -30,6 +30,8 @@ def get_argparse():
     parser.add_argument('-d', '--data_path',
                         default='./ILSVRC/Data/CLS-LOC/train',
                         help='Path to ImageNet training data')
+    parser.add_argument('--bottleneck_ratio', type=float, default=2/3,
+                        help='Bottleneck compression ratio (default: 2/3)')
     return parser.parse_args()
 
 # variables
@@ -79,7 +81,7 @@ def main():
     elif model_size == 'medium':
         pdn = get_pdn_medium(out_channels, padding=True)
     elif model_size == 'small_bottleneck':
-        pdn = get_pdn_small_bottleneck(out_channels, padding=False)
+        pdn = get_pdn_small_bottleneck(out_channels, padding=False, bottleneck_ratio=config.bottleneck_ratio)
     else:
         raise Exception(f'Unknown model_size: {model_size}')
 
@@ -117,18 +119,20 @@ def main():
         tqdm_obj.set_description(f'{(loss.item())}')
 
         if iteration % 10000 == 0:
+            ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
             torch.save(pdn,
                        os.path.join(config.output_folder,
-                                    f'teacher_{model_size}_tmp.pth'))
+                                    f'teacher_{model_size}{ratio_suffix}_tmp.pth'))
             torch.save(pdn.state_dict(),
                        os.path.join(config.output_folder,
-                                    f'teacher_{model_size}_tmp_state.pth'))
+                                    f'teacher_{model_size}{ratio_suffix}_tmp_state.pth'))
+    ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
     torch.save(pdn,
                os.path.join(config.output_folder,
-                            f'teacher_{model_size}_final.pth'))
+                            f'teacher_{model_size}{ratio_suffix}_final.pth'))
     torch.save(pdn.state_dict(),
                os.path.join(config.output_folder,
-                            f'teacher_{model_size}_final_state.pth'))
+                            f'teacher_{model_size}{ratio_suffix}_final_state.pth'))
 
 
 @torch.no_grad()

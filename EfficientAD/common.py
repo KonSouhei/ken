@@ -5,10 +5,10 @@ from torchvision.datasets import ImageFolder
 
 
 class BottleneckBlock(nn.Module):
-      def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
+      def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bottleneck_ratio=2/3):
             super().__init__()
 
-            bottle_channel = in_channels * 2 // 3
+            bottle_channel = int(in_channels * bottleneck_ratio)
 
             self.bottleneck = nn.Sequential(
                   nn.Conv2d(in_channels=in_channels, out_channels=bottle_channel, kernel_size=1),
@@ -104,7 +104,7 @@ def get_pdn_small(out_channels=384, padding=False):
         nn.ReLU(inplace=True),
         nn.Conv2d(in_channels=256, out_channels=out_channels, kernel_size=4)
     )
-def get_pdn_small_bottleneck(out_channels=384, padding=False):
+def get_pdn_small_bottleneck(out_channels=384, padding=False, bottleneck_ratio=2/3):
     pad_mult = 1 if padding else 0
     return nn.Sequential(
         nn.Conv2d(in_channels=3, out_channels=128, kernel_size=4,
@@ -112,10 +112,10 @@ def get_pdn_small_bottleneck(out_channels=384, padding=False):
         nn.ReLU(inplace=True),
         nn.AvgPool2d(kernel_size=2, stride=2, padding=1 * pad_mult),
 
-        BottleneckBlock(128,256,4,1,3 * pad_mult),
+        BottleneckBlock(128,256,4,1,3 * pad_mult, bottleneck_ratio),
         nn.AvgPool2d(kernel_size=2, stride=2, padding=1 * pad_mult),
 
-        BottleneckBlock(256,256,3,1,1 * pad_mult),
+        BottleneckBlock(256,256,3,1,1 * pad_mult, bottleneck_ratio),
 
         nn.Conv2d(in_channels=256, out_channels=out_channels, kernel_size=4)
     )

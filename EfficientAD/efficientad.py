@@ -37,6 +37,8 @@ def get_argparse():
                         default='./mvtec_loco_anomaly_detection',
                         help='Downloaded Mvtec LOCO dataset')
     parser.add_argument('-t', '--train_steps', type=int, default=70000)
+    parser.add_argument('--bottleneck_ratio', type=float, default=2/3,
+                        help='Bottleneck compression ratio (default: 2/3)')
     return parser.parse_args()
 
 # constants
@@ -141,8 +143,8 @@ def main():
         teacher = get_pdn_medium(out_channels)
         student = get_pdn_medium(2 * out_channels)
     elif config.model_size == 'bottleneck':
-        teacher = get_pdn_small_bottleneck(out_channels)
-        student = get_pdn_small_bottleneck(2 * out_channels)   
+        teacher = get_pdn_small_bottleneck(out_channels, bottleneck_ratio=config.bottleneck_ratio)
+        student = get_pdn_small_bottleneck(2 * out_channels, bottleneck_ratio=config.bottleneck_ratio)   
     else:
         raise Exception()
     if config.weights != 'none' and os.path.exists(config.weights):
