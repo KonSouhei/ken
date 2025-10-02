@@ -5,6 +5,7 @@ import argparse
 import os
 import random
 import copy
+import csv
 import torch.nn.functional as F
 import numpy as np
 import torch
@@ -12,6 +13,9 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.models import Wide_ResNet101_2_Weights
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')  # GUIなし環境用
+import matplotlib.pyplot as plt
 from common import (get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck,
                     ImageFolderWithoutTarget, InfiniteDataloader)
 
@@ -32,6 +36,14 @@ def get_argparse():
                         help='Path to ImageNet training data')
     parser.add_argument('--bottleneck_ratio', type=float, default=2/3,
                         help='Bottleneck compression ratio (default: 2/3)')
+    parser.add_argument('--epochs', type=int, default=60000,
+                        help='Number of training iterations (default: 60000)')
+    parser.add_argument('--save_interval', type=int, default=10000,
+                        help='Save checkpoint every N iterations (default: 10000)')
+    parser.add_argument('--log_interval', type=int, default=100,
+                        help='Log loss every N iterations (default: 100)')
+    parser.add_argument('--early_stopping_patience', type=int, default=0,
+                        help='Early stopping patience in iterations (0 to disable, default: 0)')
     return parser.parse_args()
 
 # variables
@@ -88,8 +100,8 @@ def main():
     train_set = ImageFolderWithoutTarget(imagenet_train_path,
                                          transform=train_transform)
     #バッチサイズ
-    train_loader = DataLoader(train_set, batch_size=32, shuffle=True,
-                              num_workers=7, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=16, shuffle=True,
+                              num_workers=4, pin_memory=True)
     train_loader = InfiniteDataloader(train_loader)
 
     channel_mean, channel_std = feature_normalization(extractor=extractor,
@@ -101,7 +113,18 @@ def main():
 
     optimizer = torch.optim.Adam(pdn.parameters(), lr=1e-4, weight_decay=1e-5)
 
-    tqdm_obj = tqdm(range(60000))
+    # ログファイルの準備
+    ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
+    log_file = os.path.join(config.output_folder, f'training_log{ratio_suffix}.csv')
+    with open(log_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['iteration', 'loss'])
+
+    # Early stopping用変数
+    best_loss = float('inf')
+    no_improvement_count = 0
+
+    tqdm_obj = tqdm(range(config.epochs))
     for iteration, (image_fe, image_pdn) in zip(tqdm_obj, train_loader):
         if on_gpu:
             image_fe = image_fe.cuda()
@@ -116,23 +139,79 @@ def main():
         loss.backward()
         optimizer.step()
 
-        tqdm_obj.set_description(f'{(loss.item())}')
+        tqdm_obj.set_description(f'Loss: {loss.item():.6f}')
 
-        if iteration % 10000 == 0:
-            ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
+        # ログ記録
+        if iteration % config.log_interval == 0:
+            with open(log_file, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([iteration, loss.item()])
+
+            # Early stopping チェック（patience > 0の場合のみ）
+            if config.early_stopping_patience > 0:
+                if loss.item() < best_loss:
+                    best_loss = loss.item()
+                    no_improvement_count = 0
+                else:
+                    no_improvement_count += config.log_interval
+
+                if no_improvement_count >= config.early_stopping_patience:
+                    tqdm_obj.write(f'Early stopping at iteration {iteration}. No improvement for {config.early_stopping_patience} iterations.')
+                    break
+
+        # チェックポイント保存
+        if iteration % config.save_interval == 0 and iteration > 0:
             torch.save(pdn,
                        os.path.join(config.output_folder,
-                                    f'teacher_{model_size}{ratio_suffix}_tmp.pth'))
+                                    f'teacher_{model_size}{ratio_suffix}_iter_{iteration}.pth'))
             torch.save(pdn.state_dict(),
                        os.path.join(config.output_folder,
-                                    f'teacher_{model_size}{ratio_suffix}_tmp_state.pth'))
-    ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
+                                    f'teacher_{model_size}{ratio_suffix}_iter_{iteration}_state.pth'))
+
+    # 最終モデル保存
     torch.save(pdn,
                os.path.join(config.output_folder,
                             f'teacher_{model_size}{ratio_suffix}_final.pth'))
     torch.save(pdn.state_dict(),
                os.path.join(config.output_folder,
                             f'teacher_{model_size}{ratio_suffix}_final_state.pth'))
+
+    # loss曲線をプロット
+    plot_loss_curve(log_file, config.output_folder, ratio_suffix)
+
+    print(f'\nTraining completed!')
+    print(f'Log file: {log_file}')
+    print(f'Loss curve: {os.path.join(config.output_folder, f"loss_curve{ratio_suffix}.png")}')
+
+
+def plot_loss_curve(log_file, output_folder, ratio_suffix):
+    """loss曲線をプロットしてPNG保存"""
+    try:
+        # CSVから読み込み
+        iterations = []
+        losses = []
+        with open(log_file, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                iterations.append(int(row['iteration']))
+                losses.append(float(row['loss']))
+
+        # プロット
+        plt.figure(figsize=(10, 6))
+        plt.plot(iterations, losses, linewidth=2)
+        plt.xlabel('Iteration', fontsize=12)
+        plt.ylabel('Loss', fontsize=12)
+        plt.title('Training Loss Curve', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        # 保存
+        plot_path = os.path.join(output_folder, f'loss_curve{ratio_suffix}.png')
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        print(f'Loss curve saved: {plot_path}')
+    except Exception as e:
+        print(f'Failed to plot loss curve: {e}')
 
 
 @torch.no_grad()
