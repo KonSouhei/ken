@@ -168,4 +168,3 @@ def detailed_inference_benchmark(category='bottle'):
 if __name__ == "__main__":
     import sys
     category = sys.argv[1] if len(sys.argv) > 1 else 'bottle'
-    detailed_inference_benchmark(category)

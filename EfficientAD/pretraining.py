@@ -44,6 +44,10 @@ def get_argparse():
                         help='Log loss every N iterations (default: 100)')
     parser.add_argument('--early_stopping_patience', type=int, default=0,
                         help='Early stopping patience in iterations (0 to disable, default: 0)')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to checkpoint to resume from (e.g., output/pretraining/1/teacher_small_iter_5000_state.pth)')
+    parser.add_argument('--resume_iter', type=int, default=None,
+                        help='Iteration number to resume from (required when using --resume)')
     return parser.parse_args()
 
 # variables
@@ -113,18 +117,37 @@ def main():
 
     optimizer = torch.optim.Adam(pdn.parameters(), lr=1e-4, weight_decay=1e-5)
 
+    # チェックポイントから再開
+    start_iteration = 0
+    if config.resume:
+        if config.resume_iter is None:
+            raise ValueError('--resume_iter is required when using --resume')
+        print(f'Loading checkpoint from {config.resume}')
+        state_dict = torch.load(config.resume)
+        pdn.load_state_dict(state_dict)
+        start_iteration = config.resume_iter
+        print(f'Resuming from iteration {start_iteration}')
+
     # ログファイルの準備
     ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
     log_file = os.path.join(config.output_folder, f'training_log{ratio_suffix}.csv')
-    with open(log_file, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['iteration', 'loss'])
+
+    # 新規作成または追記モード
+    if start_iteration == 0:
+        with open(log_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['iteration', 'loss'])
+    elif not os.path.exists(log_file):
+        print(f'Warning: log file {log_file} not found. Creating new log file.')
+        with open(log_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['iteration', 'loss'])
 
     # Early stopping用変数
     best_loss = float('inf')
     no_improvement_count = 0
 
-    tqdm_obj = tqdm(range(config.epochs))
+    tqdm_obj = tqdm(range(start_iteration, config.epochs))
     for iteration, (image_fe, image_pdn) in zip(tqdm_obj, train_loader):
         if on_gpu:
             image_fe = image_fe.cuda()
