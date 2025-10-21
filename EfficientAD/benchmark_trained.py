@@ -73,7 +73,7 @@ def detailed_inference_benchmark(category='bottle'):
     print(f"Category: {category}")
 
     # モデル読み込み
-    model_dir = f'./output/1/trainings/mvtec_ad/{category}'
+    model_dir = f'./output/efficientad_result_0.9_{category}/trainings/mvtec_ad/{category}'
     teacher, student, autoencoder = load_trained_models(model_dir)
 
     # GPU設定
@@ -168,3 +168,4 @@ def detailed_inference_benchmark(category='bottle'):
 if __name__ == "__main__":
     import sys
     category = sys.argv[1] if len(sys.argv) > 1 else 'bottle'
+    detailed_inference_benchmark(category)

@@ -11,7 +11,7 @@ import os
 import random
 from tqdm import tqdm
 from common import get_autoencoder, get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck, \
-    ImageFolderWithoutTarget, ImageFolderWithPath, InfiniteDataloader
+    BottleneckBlock,ImageFolderWithoutTarget, ImageFolderWithPath, InfiniteDataloader
 from sklearn.metrics import roc_auc_score
 
 def get_argparse():

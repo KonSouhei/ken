@@ -117,16 +117,37 @@ def main():
 
     optimizer = torch.optim.Adam(pdn.parameters(), lr=1e-4, weight_decay=1e-5)
 
+    # 学習率スケジューラを追加（50%と75%の時点で段階的に減衰）
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+        optimizer,
+        milestones=[int(config.epochs * 0.5), int(config.epochs * 0.75)],  # 50%, 75%
+        gamma=0.5  # 各マイルストーンで半分に減衰
+    )
+
     # チェックポイントから再開
     start_iteration = 0
     if config.resume:
         if config.resume_iter is None:
             raise ValueError('--resume_iter is required when using --resume')
         print(f'Loading checkpoint from {config.resume}')
-        state_dict = torch.load(config.resume)
-        pdn.load_state_dict(state_dict)
+        checkpoint = torch.load(config.resume)
+
+        # モデルのみの場合（後方互換性）
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            pdn.load_state_dict(checkpoint['model_state_dict'])
+            if 'optimizer_state_dict' in checkpoint:
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scheduler_state_dict' in checkpoint:
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        else:
+            # 古い形式（state_dictのみ）
+            pdn.load_state_dict(checkpoint)
+
         start_iteration = config.resume_iter
-        print(f'Resuming from iteration {start_iteration}')
+        # スケジューラを正しいステップまで進める
+        for _ in range(start_iteration):
+            scheduler.step()
+        print(f'Resuming from iteration {start_iteration}, LR: {scheduler.get_last_lr()[0]:.2e}')
 
     # ログファイルの準備
     ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
@@ -161,8 +182,10 @@ def main():
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()  # 学習率スケジューラを更新
 
-        tqdm_obj.set_description(f'Loss: {loss.item():.6f}')
+        current_lr = scheduler.get_last_lr()[0]
+        tqdm_obj.set_description(f'Loss: {loss.item():.6f}, LR: {current_lr:.2e}')
 
         # ログ記録
         if iteration % config.log_interval == 0:
@@ -184,6 +207,17 @@ def main():
 
         # チェックポイント保存
         if iteration % config.save_interval == 0 and iteration > 0:
+            checkpoint = {
+                'model_state_dict': pdn.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'iteration': iteration
+            }
+            # 完全なチェックポイント（再開用）
+            torch.save(checkpoint,
+                       os.path.join(config.output_folder,
+                                    f'teacher_{model_size}{ratio_suffix}_iter_{iteration}_checkpoint.pth'))
+            # モデルのみ（互換性のため残す）
             torch.save(pdn,
                        os.path.join(config.output_folder,
                                     f'teacher_{model_size}{ratio_suffix}_iter_{iteration}.pth'))
@@ -192,6 +226,15 @@ def main():
                                     f'teacher_{model_size}{ratio_suffix}_iter_{iteration}_state.pth'))
 
     # 最終モデル保存
+    checkpoint = {
+        'model_state_dict': pdn.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'iteration': iteration
+    }
+    torch.save(checkpoint,
+               os.path.join(config.output_folder,
+                            f'teacher_{model_size}{ratio_suffix}_final_checkpoint.pth'))
     torch.save(pdn,
                os.path.join(config.output_folder,
                             f'teacher_{model_size}{ratio_suffix}_final.pth'))
