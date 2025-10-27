@@ -1,5 +1,3 @@
-#!/usr/bin/python
-# -*- coding: utf-8 -*-
 import torchvision
 import argparse
 import os
@@ -16,8 +14,8 @@ from tqdm import tqdm
 import matplotlib
 matplotlib.use('Agg')  # GUIなし環境用
 import matplotlib.pyplot as plt
-from common import (get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck,get_pdn_small_dws_small,
-                    ImageFolderWithoutTarget, InfiniteDataloader)
+from common import get_pdn_small, get_pdn_medium, get_pdn_small_bottleneck, ImageFolderWithoutTarget, InfiniteDataloader
+
 
 
 def get_argparse():
@@ -28,14 +26,14 @@ def get_argparse():
     parser.add_argument('-o', '--output_folder',
                         default='output/pretraining/1/')
     parser.add_argument('-m', '--model_size',
-                        choices=['small', 'medium', 'small_bottleneck','small_DWS'],
+                        choices=['small', 'medium', 'small_bottleneck'],
                         default='small',
                         help='Model size: small, medium, or small_bottleneck')
     parser.add_argument('-d', '--data_path',
                         default='./ILSVRC/Data/CLS-LOC/train',
                         help='Path to ImageNet training data')
     parser.add_argument('--val_path',
-                        default='./archive/val.X',
+                        default='./ILSVRC/Data/CLS-LOC/val',
                         help='Path to validation data')
     parser.add_argument('--bottleneck_ratio', type=float, default=2/3,
                         help='Bottleneck compression ratio (default: 2/3)')
@@ -103,25 +101,23 @@ def main():
         pdn = get_pdn_small(out_channels, padding=True)
     elif model_size == 'medium':
         pdn = get_pdn_medium(out_channels, padding=True)
-    elif model_size == 'small_DWS':
-        pdn = get_pdn_small_dws_small(out_channels, padding=False)
     elif model_size == 'small_bottleneck':
         pdn = get_pdn_small_bottleneck(out_channels, padding=False, bottleneck_ratio=config.bottleneck_ratio)
     else:
         raise Exception(f'Unknown model_size: {model_size}')
 
+    # 訓練データローダー
     train_set = ImageFolderWithoutTarget(imagenet_train_path,
                                          transform=train_transform)
-    #バッチサイズ
-    train_loader = DataLoader(train_set, batch_size=16, shuffle=True,
-                              num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_set, batch_size=32, shuffle=True,
+                              num_workers=8, pin_memory=True)
     train_loader = InfiniteDataloader(train_loader)
 
     # 検証データローダー（別フォルダから読み込み）
     val_set = ImageFolderWithoutTarget(config.val_path,
                                        transform=train_transform)
-    val_loader = DataLoader(val_set, batch_size=16, shuffle=False,
-                            num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_set, batch_size=32, shuffle=False,
+                            num_workers=8, pin_memory=True)
 
     print(f'Train set: {len(train_set)} images')
     print(f'Validation set: {len(val_set)} images')
@@ -333,31 +329,6 @@ def plot_loss_curve(log_file, val_log_file, output_folder, ratio_suffix):
 
 
 @torch.no_grad()
-def compute_validation_loss(pdn, val_loader, extractor, channel_mean, channel_std, max_batches=100):
-    """検証データでのロスを計算"""
-    pdn.eval()
-    val_losses = []
-
-    for i, (image_fe, image_pdn) in enumerate(val_loader):
-        if i >= max_batches:
-            break
-
-        if on_gpu:
-            image_fe = image_fe.cuda()
-            image_pdn = image_pdn.cuda()
-
-        target = extractor.embed(image_fe)
-        target = (target - channel_mean) / channel_std
-        prediction = pdn(image_pdn)
-        prediction = F.interpolate(prediction, size=(64, 64), mode='bilinear', align_corners=False)
-        loss = torch.mean((target - prediction)**2)
-        val_losses.append(loss.item())
-
-    pdn.train()
-    return np.mean(val_losses)
-
-
-@torch.no_grad()
 def feature_normalization(extractor, train_loader, steps=10000):
 
     mean_outputs = []
@@ -399,6 +370,31 @@ def feature_normalization(extractor, train_loader, steps=10000):
     channel_std = torch.sqrt(channel_var)
 
     return channel_mean, channel_std
+
+
+@torch.no_grad()
+def compute_validation_loss(pdn, val_loader, extractor, channel_mean, channel_std, max_batches=100):
+    """検証データでのロスを計算"""
+    pdn.eval()
+    val_losses = []
+
+    for i, (image_fe, image_pdn) in enumerate(val_loader):
+        if i >= max_batches:
+            break
+
+        if on_gpu:
+            image_fe = image_fe.cuda()
+            image_pdn = image_pdn.cuda()
+
+        target = extractor.embed(image_fe)
+        target = (target - channel_mean) / channel_std
+        prediction = pdn(image_pdn)
+        prediction = F.interpolate(prediction, size=(64, 64), mode='bilinear', align_corners=False)
+        loss = torch.mean((target - prediction)**2)
+        val_losses.append(loss.item())
+
+    pdn.train()
+    return np.mean(val_losses)
 
 
 class FeatureExtractor(torch.nn.Module):
@@ -646,5 +642,20 @@ class ForwardHook:
 class LastLayerToExtractReachedException(Exception):
     pass
 
-if __name__ == '__main__':
-    main()
+import sys
+sys.argv = [
+    'train.py',
+    '-d', '/content/data/train',
+    '--val_path', '/content/data/val',  # 検証データのパス
+    '-o', '/content/output/bottle0.6_20000epoch',  # フォルダ名にカンマは使えない
+    '-m', 'small_bottleneck',  # small_bottleneck に修正
+    '--bottleneck_ratio', '0.6',  # bottleneck比率を指定
+    '--epochs', '20000',
+    '--save_interval', '5000',  # 5000に変更推奨（500だと多すぎ）
+    '--log_interval', '100',
+    '--val_interval', '1000',  # 1000イテレーションごとに検証ロス計算
+    '--val_batches', '100'  # 検証は100バッチのみ使用
+]
+
+# 実行
+main()

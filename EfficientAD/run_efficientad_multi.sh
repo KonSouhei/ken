@@ -5,8 +5,8 @@
 # 共通パラメータ
 DATASET="mvtec_ad"
 MODEL_SIZE="bottleneck"
-BOTTLENECK_RATIO=0.9
-TEACHER_WEIGHTS="models/teacher_small_bottleneck_ratio0.9_final.pth"
+BOTTLENECK_RATIO=0.4
+TEACHER_WEIGHTS="models/teacher_small_bottleneck_ratio0.4_final.pth"
 MVTEC_PATH="mvtec-2"
 IMAGENET_PATH="archive/train"
 TRAIN_STEPS=20000
@@ -34,7 +34,7 @@ for SUBDATASET in "${SUBDATASETS[@]}"; do
     echo "Training: ${SUBDATASET}"
     echo "========================================"
 
-    OUTPUT_DIR="output/efficientad_result_0.960_${SUBDATASET}"
+    OUTPUT_DIR="output/efficientad_result_0.4_${SUBDATASET}"
 
     # 訓練実行
     python efficientad.py \

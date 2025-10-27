@@ -28,7 +28,32 @@ class BottleneckBlock(nn.Module):
       def forward(self, x):
           return self.bottleneck(x) + self.shortcut(x)
       
-    
+
+class DWS(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
+        super().__init__()
+        
+        padding_mode = padding if isinstance(padding, str) else padding
+        
+        self.depthwise = nn.Conv2d(
+            in_channels, 
+            in_channels, 
+            kernel_size=kernel_size, 
+            stride=stride, 
+            padding=padding_mode, 
+            groups=in_channels 
+        )
+        self.pointwise = nn.Conv2d(
+            in_channels, 
+            out_channels, 
+            kernel_size=1
+        )
+
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
+   
 def get_autoencoder(out_channels=384):
     return nn.Sequential(
         # encoder
@@ -79,7 +104,7 @@ def get_autoencoder(out_channels=384):
                   padding=2),
         nn.ReLU(inplace=True),
         nn.Dropout(0.2),
-        #ここでサイズ調整する
+        #ここでサイズ調整する58か60
         nn.Upsample(size=60, mode='bilinear'),
         nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1,
                   padding=1),
@@ -104,6 +129,27 @@ def get_pdn_small(out_channels=384, padding=False):
         nn.ReLU(inplace=True),
         nn.Conv2d(in_channels=256, out_channels=out_channels, kernel_size=4)
     )
+
+
+def get_pdn_small_dws_small(out_channels=384, padding=False):
+    pad_mult = 1 if padding else 0
+    return nn.Sequential(
+
+        nn.Conv2d(3, 128, kernel_size=4, padding=3 * pad_mult),
+        nn.ReLU(inplace=True),
+        nn.AvgPool2d(kernel_size=2, stride=2, padding=1 * pad_mult),
+
+        DWS(128, 256, kernel_size=4, padding=3 * pad_mult),
+        nn.ReLU(inplace=True),
+        nn.AvgPool2d(kernel_size=2, stride=2, padding=1 * pad_mult),
+
+        DWS(256, 256, kernel_size=3, padding=1 * pad_mult),
+        nn.ReLU(inplace=True),
+
+        nn.Conv2d(256, out_channels, kernel_size=4)
+    )
+
+
 def get_pdn_small_bottleneck(out_channels=384, padding=False, bottleneck_ratio=2/3):
     pad_mult = 1 if padding else 0
     return nn.Sequential(
