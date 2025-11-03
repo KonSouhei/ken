@@ -3,9 +3,9 @@
 
 # 共通パラメータ
 $DATASET = "mvtec_ad"
-$MODEL_SIZE = "bottleneck"
-$BOTTLENECK_RATIO = 0.4
-$TEACHER_WEIGHTS = "models/teacher_small_bottleneck_ratio0.4_final_state.pth"
+$MODEL_SIZE = "dws"
+$BOTTLENECK_RATIO = 1.0
+$TEACHER_WEIGHTS = "models/teacher_small_DWS_final_state.pth"
 $MVTEC_PATH = "mvtec-2"
 $IMAGENET_PATH = "archive/train"
 $TRAIN_STEPS = 20000
@@ -33,7 +33,7 @@ foreach ($SUBDATASET in $SUBDATASETS) {
     Write-Host "Training: $SUBDATASET"
     Write-Host "========================================"
 
-    $OUTPUT_DIR = "output/efficientad_result_0.4_$SUBDATASET"
+    $OUTPUT_DIR = "output/dwsss"
 
     # 訓練実行
     python efficientad.py `

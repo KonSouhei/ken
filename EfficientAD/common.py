@@ -104,8 +104,8 @@ def get_autoencoder(out_channels=384):
                   padding=2),
         nn.ReLU(inplace=True),
         nn.Dropout(0.2),
-        #ここでサイズ調整する58か60
-        nn.Upsample(size=60, mode='bilinear'),
+        #ここでサイズ調整する56か60 56がボトルネック
+        nn.Upsample(size=56, mode='bilinear'),
         nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1,
                   padding=1),
         nn.ReLU(inplace=True),

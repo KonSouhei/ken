@@ -11,8 +11,9 @@ import os
 import random
 from tqdm import tqdm
 from common import get_autoencoder, get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck, \
-    BottleneckBlock,ImageFolderWithoutTarget, ImageFolderWithPath, InfiniteDataloader
+    get_pdn_small_dws_small, BottleneckBlock,ImageFolderWithoutTarget, ImageFolderWithPath, InfiniteDataloader
 from sklearn.metrics import roc_auc_score
+import matplotlib.pyplot as plt
 
 def get_argparse():
     parser = argparse.ArgumentParser()
@@ -23,7 +24,7 @@ def get_argparse():
                              'sub-datasets of Mvtec LOCO')
     parser.add_argument('-o', '--output_dir', default='output/1')
     parser.add_argument('-m', '--model_size', default='small',
-                        choices=['small', 'medium' , 'bottleneck'])
+                        choices=['small', 'medium', 'bottleneck', 'dws'])
     parser.add_argument('-w', '--weights', default='models/teacher_small.pth')
     parser.add_argument('-i', '--imagenet_train_path',
                         default='none',
@@ -46,6 +47,11 @@ seed = 42
 on_gpu = torch.cuda.is_available()
 out_channels = 384
 image_size = 256
+
+# Loss weights
+w_st = 1.0
+w_ae = 5.0
+w_stae = 10.0
 
 # data loading
 default_transform = transforms.Compose([
@@ -144,7 +150,10 @@ def main():
         student = get_pdn_medium(2 * out_channels)
     elif config.model_size == 'bottleneck':
         teacher = get_pdn_small_bottleneck(out_channels, bottleneck_ratio=config.bottleneck_ratio)
-        student = get_pdn_small_bottleneck(2 * out_channels, bottleneck_ratio=config.bottleneck_ratio)   
+        student = get_pdn_small_bottleneck(2 * out_channels, bottleneck_ratio=config.bottleneck_ratio)
+    elif config.model_size == 'dws':
+        teacher = get_pdn_small_dws_small(out_channels)
+        student = get_pdn_small_dws_small(2 * out_channels)
     else:
         raise Exception()
     if config.weights != 'none' and os.path.exists(config.weights):
@@ -172,6 +181,14 @@ def main():
                                  lr=1e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=int(0.95 * config.train_steps), gamma=0.1)
+
+    # Loss tracking for visualization
+    loss_st_history = []
+    loss_ae_history = []
+    loss_stae_history = []
+    loss_total_history = []
+    steps_history = []
+
     tqdm_obj = tqdm(range(config.train_steps))
     for iteration, (image_st, image_ae), image_penalty in zip(
             tqdm_obj, train_loader_infinite, penalty_loader_infinite):
@@ -204,7 +221,7 @@ def main():
         distance_stae = (ae_output - student_output_ae)**2
         loss_ae = torch.mean(distance_ae)
         loss_stae = torch.mean(distance_stae)
-        loss_total = loss_st + loss_ae + loss_stae
+        loss_total = w_st * loss_st + w_ae * loss_ae + w_stae * loss_stae
 
         optimizer.zero_grad()
         loss_total.backward()
@@ -214,6 +231,13 @@ def main():
         if iteration % 10 == 0:
             tqdm_obj.set_description(
                 "Current loss: {:.4f}  ".format(loss_total.item()))
+
+        if iteration % 50 == 0:
+            loss_st_history.append(loss_st.item())
+            loss_ae_history.append(loss_ae.item())
+            loss_stae_history.append(loss_stae.item())
+            loss_total_history.append(loss_total.item())
+            steps_history.append(iteration)
 
         if iteration % 1000 == 0:
             torch.save(teacher, os.path.join(train_output_dir,
@@ -267,6 +291,11 @@ def main():
         q_ae_start=q_ae_start, q_ae_end=q_ae_end,
         test_output_dir=test_output_dir, desc='Final inference')
     print('Final image auc: {:.4f}'.format(auc))
+
+    # Plot loss curves
+    plot_losses(steps_history, loss_st_history, loss_ae_history,
+                loss_stae_history, loss_total_history, train_output_dir,
+                w_st, w_ae, w_stae)
 
 def test(test_set, teacher, student, autoencoder, teacher_mean, teacher_std,
          q_st_start, q_st_end, q_ae_start, q_ae_end, test_output_dir=None,
@@ -346,6 +375,24 @@ def map_normalization(validation_loader, teacher, student, autoencoder,
     q_ae_start = torch.quantile(maps_ae, q=0.9)
     q_ae_end = torch.quantile(maps_ae, q=0.995)
     return q_st_start, q_st_end, q_ae_start, q_ae_end
+
+def plot_losses(steps, loss_st, loss_ae, loss_stae, loss_total, output_dir, w_st, w_ae, w_stae):
+    """Plot and save the training loss curves."""
+    plt.figure(figsize=(12, 6))
+    plt.plot(steps, loss_st, label='loss_st', linewidth=2)
+    plt.plot(steps, loss_ae, label='loss_ae', linewidth=2)
+    plt.plot(steps, loss_stae, label='loss_stae', linewidth=2)
+    plt.plot(steps, loss_total, label='loss_total', linewidth=2)
+    plt.xlabel('Training Steps', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title(f'Training Loss Curves (w_st={w_st}, w_ae={w_ae}, w_stae={w_stae})', fontsize=14)
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    save_path = os.path.join(output_dir, 'loss_curve.png')
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    print(f'Loss curve saved to {save_path}')
 
 @torch.no_grad()
 def teacher_normalization(teacher, train_loader):
