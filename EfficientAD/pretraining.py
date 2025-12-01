@@ -17,7 +17,7 @@ import matplotlib
 matplotlib.use('Agg')  # GUIなし環境用
 import matplotlib.pyplot as plt
 from common import (get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck,get_pdn_small_dws_small,
-                    ImageFolderWithoutTarget, InfiniteDataloader)
+                    get_pdn_ghost_simple, ImageFolderWithoutTarget, InfiniteDataloader)
 
 
 def get_argparse():
@@ -28,9 +28,9 @@ def get_argparse():
     parser.add_argument('-o', '--output_folder',
                         default='output/pretraining/1/')
     parser.add_argument('-m', '--model_size',
-                        choices=['small', 'medium', 'small_bottleneck','small_DWS'],
+                        choices=['small', 'medium', 'small_bottleneck','small_DWS', 'ghostnet'],
                         default='small',
-                        help='Model size: small, medium, or small_bottleneck')
+                        help='Model size: small, medium, small_bottleneck, small_DWS, or ghostnet')
     parser.add_argument('-d', '--data_path',
                         default='./ILSVRC/Data/CLS-LOC/train',
                         help='Path to ImageNet training data')
@@ -107,6 +107,8 @@ def main():
         pdn = get_pdn_small_dws_small(out_channels, padding=False)
     elif model_size == 'small_bottleneck':
         pdn = get_pdn_small_bottleneck(out_channels, padding=False, bottleneck_ratio=config.bottleneck_ratio)
+    elif model_size == 'ghostnet':
+        pdn = get_pdn_ghost_simple(out_channels, padding=False)
     else:
         raise Exception(f'Unknown model_size: {model_size}')
 

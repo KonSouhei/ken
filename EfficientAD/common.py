@@ -1,5 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+import torch
 from torch import nn
 from torchvision.datasets import ImageFolder
 
@@ -53,7 +54,39 @@ class DWS(nn.Module):
         x = self.depthwise(x)
         x = self.pointwise(x)
         return x
-   
+
+
+class GhostModule(nn.Module):
+    """シンプルなGhostModule実装
+
+    Primary特徴（高コスト・重要）とGhost特徴（低コスト・補助）を組み合わせる。
+    """
+    def __init__(self, inp, oup, kernel_size=3, ratio=2, padding=1):
+        super().__init__()
+        self.oup = oup
+        init_channels = oup // ratio  # 半分だけ通常Conv
+
+        # Primary特徴: 高コストだが重要
+        self.primary_conv = nn.Sequential(
+            nn.Conv2d(inp, init_channels, kernel_size, padding=padding, bias=False),
+            nn.BatchNorm2d(init_channels),
+            nn.ReLU(inplace=True)
+        )
+
+        # Ghost特徴: 低コストで生成
+        self.cheap_operation = nn.Sequential(
+            nn.Conv2d(init_channels, init_channels, kernel_size,
+                     padding=padding, groups=init_channels, bias=False),  # Depthwise
+            nn.BatchNorm2d(init_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        primary = self.primary_conv(x)
+        ghost = self.cheap_operation(primary)
+        return torch.cat([primary, ghost], dim=1)  # 結合
+
+
 def get_autoencoder(out_channels=384):
     return nn.Sequential(
         # encoder
@@ -165,6 +198,32 @@ def get_pdn_small_bottleneck(out_channels=384, padding=False, bottleneck_ratio=2
 
         nn.Conv2d(in_channels=256, out_channels=out_channels, kernel_size=4)
     )
+
+
+def get_pdn_ghost_simple(out_channels=384, padding=False):
+    """シンプルなGhostModule版PDN
+
+    DWSの代わりにGhostModuleを使用。
+    Primary特徴とGhost特徴を組み合わせて特徴の多様性を向上。
+    """
+    pad_mult = 1 if padding else 0
+    return nn.Sequential(
+        # Layer 1: 初期層（DWSと同じ）
+        nn.Conv2d(3, 128, kernel_size=4, padding=3 * pad_mult),
+        nn.ReLU(inplace=True),
+        nn.AvgPool2d(kernel_size=2, stride=2, padding=1 * pad_mult),
+
+        # Layer 2: GhostModule（DWSの代わり）
+        GhostModule(128, 256, kernel_size=4, padding=3 * pad_mult if padding else 0),
+        nn.AvgPool2d(kernel_size=2, stride=2, padding=1 * pad_mult),
+
+        # Layer 3: GhostModule（DWSの代わり）
+        GhostModule(256, 256, kernel_size=3, padding=1 * pad_mult),
+
+        # Layer 4: 出力層（DWSと同じ）
+        nn.Conv2d(256, out_channels, kernel_size=4)
+    )
+
 
 def get_pdn_medium(out_channels=384, padding=False):
     pad_mult = 1 if padding else 0

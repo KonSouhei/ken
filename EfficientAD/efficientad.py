@@ -11,7 +11,7 @@ import os
 import random
 from tqdm import tqdm
 from common import get_autoencoder, get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck, \
-    get_pdn_small_dws_small, BottleneckBlock,ImageFolderWithoutTarget, ImageFolderWithPath, InfiniteDataloader
+    get_pdn_small_dws_small, get_pdn_ghost_simple, BottleneckBlock,ImageFolderWithoutTarget, ImageFolderWithPath, InfiniteDataloader
 from sklearn.metrics import roc_auc_score
 import matplotlib.pyplot as plt
 
@@ -24,7 +24,7 @@ def get_argparse():
                              'sub-datasets of Mvtec LOCO')
     parser.add_argument('-o', '--output_dir', default='output/1')
     parser.add_argument('-m', '--model_size', default='small',
-                        choices=['small', 'medium', 'bottleneck', 'dws'])
+                        choices=['small', 'medium', 'bottleneck', 'dws', 'ghostnet'])
     parser.add_argument('-w', '--weights', default='models/teacher_small.pth')
     parser.add_argument('-i', '--imagenet_train_path',
                         default='none',
@@ -154,6 +154,9 @@ def main():
     elif config.model_size == 'dws':
         teacher = get_pdn_small_dws_small(out_channels)
         student = get_pdn_small_dws_small(2 * out_channels)
+    elif config.model_size == 'ghostnet':
+        teacher = get_pdn_ghost_simple(out_channels)
+        student = get_pdn_ghost_simple(2 * out_channels)
     else:
         raise Exception()
     if config.weights != 'none' and os.path.exists(config.weights):
