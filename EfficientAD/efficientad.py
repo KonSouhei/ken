@@ -175,6 +175,7 @@ def main():
         autoencoder.cuda()
 
     teacher_mean, teacher_std = teacher_normalization(teacher, train_loader)
+    autoencoder_mean, autoencoder_std = autoencoder_normalization(autoencoder, train_loader)
 
     optimizer = torch.optim.Adam(itertools.chain(student.parameters(),
                                                  autoencoder.parameters()),
@@ -213,6 +214,7 @@ def main():
             loss_st = loss_hard
 
         ae_output = autoencoder(image_ae)
+        ae_output = (ae_output - autoencoder_mean) / autoencoder_std
         with torch.no_grad():
             teacher_output_ae = teacher(image_ae)
             teacher_output_ae = (teacher_output_ae - teacher_mean) / teacher_std
@@ -257,11 +259,13 @@ def main():
                 validation_loader=validation_loader, teacher=teacher,
                 student=student, autoencoder=autoencoder,
                 teacher_mean=teacher_mean, teacher_std=teacher_std,
+                autoencoder_mean=autoencoder_mean, autoencoder_std=autoencoder_std,
                 desc='Intermediate map normalization')
             auc = test(
                 test_set=test_set, teacher=teacher, student=student,
                 autoencoder=autoencoder, teacher_mean=teacher_mean,
-                teacher_std=teacher_std, q_st_start=q_st_start,
+                teacher_std=teacher_std, autoencoder_mean=autoencoder_mean,
+                autoencoder_std=autoencoder_std, q_st_start=q_st_start,
                 q_st_end=q_st_end, q_ae_start=q_ae_start, q_ae_end=q_ae_end,
                 test_output_dir=None, desc='Intermediate inference')
             print('Intermediate image auc: {:.4f}'.format(auc))
@@ -283,11 +287,13 @@ def main():
     q_st_start, q_st_end, q_ae_start, q_ae_end = map_normalization(
         validation_loader=validation_loader, teacher=teacher, student=student,
         autoencoder=autoencoder, teacher_mean=teacher_mean,
-        teacher_std=teacher_std, desc='Final map normalization')
+        teacher_std=teacher_std, autoencoder_mean=autoencoder_mean,
+        autoencoder_std=autoencoder_std, desc='Final map normalization')
     auc = test(
         test_set=test_set, teacher=teacher, student=student,
         autoencoder=autoencoder, teacher_mean=teacher_mean,
-        teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end,
+        teacher_std=teacher_std, autoencoder_mean=autoencoder_mean,
+        autoencoder_std=autoencoder_std, q_st_start=q_st_start, q_st_end=q_st_end,
         q_ae_start=q_ae_start, q_ae_end=q_ae_end,
         test_output_dir=test_output_dir, desc='Final inference')
     print('Final image auc: {:.4f}'.format(auc))
@@ -298,6 +304,7 @@ def main():
                 w_st, w_ae, w_stae)
 
 def test(test_set, teacher, student, autoencoder, teacher_mean, teacher_std,
+         autoencoder_mean, autoencoder_std,
          q_st_start, q_st_end, q_ae_start, q_ae_end, test_output_dir=None,
          desc='Running inference'):
     y_true = []
@@ -312,7 +319,8 @@ def test(test_set, teacher, student, autoencoder, teacher_mean, teacher_std,
         map_combined, map_st, map_ae = predict(
             image=image, teacher=teacher, student=student,
             autoencoder=autoencoder, teacher_mean=teacher_mean,
-            teacher_std=teacher_std, q_st_start=q_st_start, q_st_end=q_st_end,
+            teacher_std=teacher_std, autoencoder_mean=autoencoder_mean,
+            autoencoder_std=autoencoder_std, q_st_start=q_st_start, q_st_end=q_st_end,
             q_ae_start=q_ae_start, q_ae_end=q_ae_end)
         map_combined = torch.nn.functional.pad(map_combined, (4, 4, 4, 4))
         map_combined = torch.nn.functional.interpolate(
@@ -336,11 +344,13 @@ def test(test_set, teacher, student, autoencoder, teacher_mean, teacher_std,
 
 @torch.no_grad()
 def predict(image, teacher, student, autoencoder, teacher_mean, teacher_std,
+            autoencoder_mean, autoencoder_std,
             q_st_start=None, q_st_end=None, q_ae_start=None, q_ae_end=None):
     teacher_output = teacher(image)
     teacher_output = (teacher_output - teacher_mean) / teacher_std
     student_output = student(image)
     autoencoder_output = autoencoder(image)
+    autoencoder_output = (autoencoder_output - autoencoder_mean) / autoencoder_std
     map_st = torch.mean((teacher_output - student_output[:, :out_channels])**2,
                         dim=1, keepdim=True)
     map_ae = torch.mean((autoencoder_output -
@@ -355,7 +365,8 @@ def predict(image, teacher, student, autoencoder, teacher_mean, teacher_std,
 
 @torch.no_grad()
 def map_normalization(validation_loader, teacher, student, autoencoder,
-                      teacher_mean, teacher_std, desc='Map normalization'):
+                      teacher_mean, teacher_std, autoencoder_mean, autoencoder_std,
+                      desc='Map normalization'):
     maps_st = []
     maps_ae = []
     # ignore augmented ae image
@@ -365,7 +376,8 @@ def map_normalization(validation_loader, teacher, student, autoencoder,
         map_combined, map_st, map_ae = predict(
             image=image, teacher=teacher, student=student,
             autoencoder=autoencoder, teacher_mean=teacher_mean,
-            teacher_std=teacher_std)
+            teacher_std=teacher_std, autoencoder_mean=autoencoder_mean,
+            autoencoder_std=autoencoder_std)
         maps_st.append(map_st)
         maps_ae.append(map_ae)
     maps_st = torch.cat(maps_st)
@@ -393,6 +405,33 @@ def plot_losses(steps, loss_st, loss_ae, loss_stae, loss_total, output_dir, w_st
     plt.savefig(save_path, dpi=150)
     plt.close()
     print(f'Loss curve saved to {save_path}')
+
+@torch.no_grad()
+def autoencoder_normalization(autoencoder, train_loader):
+
+    mean_outputs = []
+    for train_image, _ in tqdm(train_loader, desc='Computing autoencoder mean'):
+        if on_gpu:
+            train_image = train_image.cuda()
+        autoencoder_output = autoencoder(train_image)
+        mean_output = torch.mean(autoencoder_output, dim=[0, 2, 3])
+        mean_outputs.append(mean_output)
+    channel_mean = torch.mean(torch.stack(mean_outputs), dim=0)
+    channel_mean = channel_mean[None, :, None, None]
+
+    mean_distances = []
+    for train_image, _ in tqdm(train_loader, desc='Computing autoencoder std'):
+        if on_gpu:
+            train_image = train_image.cuda()
+        autoencoder_output = autoencoder(train_image)
+        distance = (autoencoder_output - channel_mean) ** 2
+        mean_distance = torch.mean(distance, dim=[0, 2, 3])
+        mean_distances.append(mean_distance)
+    channel_var = torch.mean(torch.stack(mean_distances), dim=0)
+    channel_var = channel_var[None, :, None, None]
+    channel_std = torch.sqrt(channel_var)
+
+    return channel_mean, channel_std
 
 @torch.no_grad()
 def teacher_normalization(teacher, train_loader):

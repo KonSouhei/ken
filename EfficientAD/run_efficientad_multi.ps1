@@ -10,8 +10,8 @@ $MVTEC_PATH = "mvtec-2"
 $IMAGENET_PATH = "archive/train"
 $TRAIN_STEPS = 20000
 
-# サブデータセットのリスト
-$SUBDATASETS = @("bottle", "cable", "capsule", "grid", "hazelnut")
+# サブデータセットのリスト（全15カテゴリ）
+$SUBDATASETS = @("bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut", "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper")
 
 Write-Host "========================================"
 Write-Host "EfficientAD Multi-Dataset Training"
@@ -33,7 +33,7 @@ foreach ($SUBDATASET in $SUBDATASETS) {
     Write-Host "Training: $SUBDATASET"
     Write-Host "========================================"
 
-    $OUTPUT_DIR = "output/dwsss"
+    $OUTPUT_DIR = "output/dws15"
 
     # 訓練実行
     python efficientad.py `
@@ -74,7 +74,7 @@ Write-Host "Total time: ${HOURS}h ${MINUTES}m"
 Write-Host ""
 Write-Host "Results:"
 foreach ($SUBDATASET in $SUBDATASETS) {
-    $OUTPUT_DIR = "output/efficientad_result_0.9_$SUBDATASET"
+    $OUTPUT_DIR = "output/dws15"
     Write-Host "  - ${SUBDATASET}: $OUTPUT_DIR"
 }
 Write-Host "========================================"
