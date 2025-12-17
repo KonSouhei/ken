@@ -40,6 +40,10 @@ def get_argparse():
     parser.add_argument('-t', '--train_steps', type=int, default=70000)
     parser.add_argument('--bottleneck_ratio', type=float, default=2/3,
                         help='Bottleneck compression ratio (default: 2/3)')
+    parser.add_argument('--enable_val_curve', action='store_true',
+                        help='Enable validation AUC curve visualization during training')
+    parser.add_argument('--val_interval', type=int, default=50,
+                        help='Validation evaluation interval in steps (default: 50)')
     return parser.parse_args()
 
 # constants
@@ -196,6 +200,10 @@ def main():
     loss_total_history = []
     steps_history = []
 
+    # Validation curve tracking (if enabled)
+    validation_steps = []
+    validation_aucs = []
+
     tqdm_obj = tqdm(range(config.train_steps))
     for iteration, (image_st, image_ae), image_penalty in zip(
             tqdm_obj, train_loader_infinite, penalty_loader_infinite):
@@ -246,6 +254,40 @@ def main():
             loss_stae_history.append(loss_stae.item())
             loss_total_history.append(loss_total.item())
             steps_history.append(iteration)
+
+        # Validation curve evaluation
+        if config.enable_val_curve and iteration % config.val_interval == 0:
+            # Switch to eval mode
+            teacher.eval()
+            student.eval()
+            autoencoder.eval()
+
+            # Compute normalization parameters for current model state
+            q_st_start, q_st_end, q_ae_start, q_ae_end = map_normalization(
+                validation_loader=validation_loader, teacher=teacher,
+                student=student, autoencoder=autoencoder,
+                teacher_mean=teacher_mean, teacher_std=teacher_std,
+                autoencoder_mean=autoencoder_mean, autoencoder_std=autoencoder_std,
+                desc=f'Val map norm (step {iteration})')
+
+            # Evaluate on test set
+            auc = test(
+                test_set=test_set, teacher=teacher, student=student,
+                autoencoder=autoencoder, teacher_mean=teacher_mean,
+                teacher_std=teacher_std, autoencoder_mean=autoencoder_mean,
+                autoencoder_std=autoencoder_std, q_st_start=q_st_start,
+                q_st_end=q_st_end, q_ae_start=q_ae_start, q_ae_end=q_ae_end,
+                test_output_dir=None, desc=f'Val inference (step {iteration})')
+
+            # Record for plotting
+            validation_steps.append(iteration)
+            validation_aucs.append(auc)
+            print(f'Step {iteration} - Validation AUC: {auc:.4f}%')
+
+            # Switch back to train mode
+            teacher.eval()  # teacher always stays in eval
+            student.train()
+            autoencoder.train()
 
         if iteration % 1000 == 0:
             torch.save(teacher, os.path.join(train_output_dir,
@@ -308,6 +350,10 @@ def main():
     plot_losses(steps_history, loss_st_history, loss_ae_history,
                 loss_stae_history, loss_total_history, train_output_dir,
                 w_st, w_ae, w_stae)
+
+    # Plot validation curve if enabled
+    if config.enable_val_curve and len(validation_steps) > 0:
+        plot_validation_curve(validation_steps, validation_aucs, train_output_dir)
 
 def test(test_set, teacher, student, autoencoder, teacher_mean, teacher_std,
          autoencoder_mean, autoencoder_std,
@@ -411,6 +457,41 @@ def plot_losses(steps, loss_st, loss_ae, loss_stae, loss_total, output_dir, w_st
     plt.savefig(save_path, dpi=150)
     plt.close()
     print(f'Loss curve saved to {save_path}')
+
+def plot_validation_curve(steps, aucs, output_dir):
+    """Plot and save the validation AUC curve during training.
+
+    Args:
+        steps: List of training steps where validation was performed
+        aucs: List of AUC values (0-100 scale)
+        output_dir: Directory to save the plot
+    """
+    if len(steps) == 0:
+        print("Warning: No validation data to plot")
+        return
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(steps, aucs, 'b-', linewidth=2, marker='o', markersize=4, label='Validation AUC')
+    plt.xlabel('Training Steps', fontsize=14)
+    plt.ylabel('Image-level ROC-AUC (%)', fontsize=14)
+    plt.title('Validation Curve (Test Set Evaluation)', fontsize=16, fontweight='bold')
+    plt.grid(True, alpha=0.3, linestyle='--')
+    plt.ylim([0, 105])
+
+    # Add max AUC annotation
+    max_auc = max(aucs)
+    max_step = steps[aucs.index(max_auc)]
+    plt.axhline(y=max_auc, color='r', linestyle='--', alpha=0.5, linewidth=1)
+    plt.text(max_step, max_auc + 2, f'Max: {max_auc:.2f}% @ step {max_step}',
+             fontsize=10, ha='center', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.legend(fontsize=12)
+    plt.tight_layout()
+
+    save_path = os.path.join(output_dir, 'validation_auc_curve.png')
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Validation curve saved to: {save_path}')
 
 @torch.no_grad()
 def autoencoder_normalization(autoencoder, train_loader):
