@@ -4,13 +4,13 @@
 # 共通パラメータ
 $DATASET = "mvtec_ad"
 $MODEL_SIZE = "ghostnet"
-$TEACHER_WEIGHTS = "output/pretraining/ghostnet/teacher_ghostnet_final_state.pth"
+$TEACHER_WEIGHTS = "models/teacher_ghostnet_final_state.pth"
 $MVTEC_PATH = "mvtec-2"
 $IMAGENET_PATH = "archive/train"
 $TRAIN_STEPS = 20000
 
 # 低精度カテゴリ（5つ）
-$SUBDATASETS = @("screw", "capsule", "zipper", "cable", "hazelnut")
+$SUBDATASETS = @( "capsule")
 
 Write-Host "========================================"
 Write-Host "EfficientAD GhostNet Test Training"

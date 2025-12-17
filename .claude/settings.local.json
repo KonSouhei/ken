@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(done)",
+      "Bash(find:*)",
+      "Bash(ls -la \"c:\\Users\\PC_User\\ken\\EfficientAD\\output\"\" 2>/dev/null || echo \"Directory not found or empty \")",
+      "Bash(grep:*)",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(python -c:*)",
+      "Bash(pip show:*)",
+      "Bash(findstr:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

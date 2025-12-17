@@ -1,3 +1,5 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
 import torchvision
 import argparse
 import os
@@ -12,48 +14,46 @@ from torchvision import transforms
 from torchvision.models import Wide_ResNet101_2_Weights
 from tqdm import tqdm
 import matplotlib
-matplotlib.use('Agg')  # GUIなし環境用
+matplotlib.use('Agg')  # GUIjW��(
 import matplotlib.pyplot as plt
-from common import get_pdn_small, get_pdn_medium, get_pdn_small_bottleneck, ImageFolderWithoutTarget, InfiniteDataloader
-
+from common import (get_pdn_small, get_pdn_medium, get_pdn_small_bottleneck, get_pdn_small_dws_small,
+                    get_pdn_ghost_simple, get_pdn_small_bottleneckfix, ImageFolderWithoutTarget, InfiniteDataloader)
 
 
 def get_argparse():
     parser = argparse.ArgumentParser(
-        prog='ProgramName',
-        description='What the program does',
-        epilog='Text at the bottom of help')
-    parser.add_argument('-o', '--output_folder',
-                        default='output/pretraining/1/')
+        prog='FinetuneTeacher',
+        description='Finetune pretrained teacher on MVTec-2 category-specific normal images')
+    parser.add_argument('-d', '--mvtec_ad_path', default='./mvtec-2',
+                        help='Path to MVTec-2 dataset (default: ./mvtec-2)')
+    parser.add_argument('-s', '--subdataset', required=True,
+                        help='MVTec category (e.g., bottle, cable, etc.)')
     parser.add_argument('-m', '--model_size',
-                        choices=['small', 'medium', 'small_bottleneck'],
+                        choices=['small', 'medium', 'small_bottleneck', 'small_DWS', 'ghostnet'],
                         default='small',
-                        help='Model size: small, medium, or small_bottleneck')
-    parser.add_argument('-d', '--data_path',
-                        default='./ILSVRC/Data/CLS-LOC/train',
-                        help='Path to ImageNet training data')
-    parser.add_argument('--val_path',
-                        default='./ILSVRC/Data/CLS-LOC/val',
-                        help='Path to validation data')
+                        help='Model size (default: small)')
+    parser.add_argument('-w', '--pretrained_weights', required=True,
+                        help='Path to ImageNet pretrained teacher (e.g., teacher_small_final_state.pth)')
+    parser.add_argument('-o', '--output_folder', default='output/finetuning/',
+                        help='Output folder (default: output/finetuning/)')
     parser.add_argument('--bottleneck_ratio', type=float, default=2/3,
                         help='Bottleneck compression ratio (default: 2/3)')
-    parser.add_argument('--epochs', type=int, default=60000,
-                        help='Number of training iterations (default: 60000)')
-    parser.add_argument('--save_interval', type=int, default=10000,
-                        help='Save checkpoint every N iterations (default: 10000)')
-    parser.add_argument('--log_interval', type=int, default=100,
-                        help='Log loss every N iterations (default: 100)')
-    parser.add_argument('--early_stopping_patience', type=int, default=0,
-                        help='Early stopping patience in iterations (0 to disable, default: 0)')
-    parser.add_argument('--resume', type=str, default=None,
-                        help='Path to checkpoint to resume from (e.g., output/pretraining/1/teacher_small_iter_5000_state.pth)')
-    parser.add_argument('--resume_iter', type=int, default=None,
-                        help='Iteration number to resume from (required when using --resume)')
-    parser.add_argument('--val_interval', type=int, default=1000,
-                        help='Validation loss calculation interval (default: 1000)')
-    parser.add_argument('--val_batches', type=int, default=100,
-                        help='Number of batches for validation (default: 100)')
+    parser.add_argument('--iterations', type=int, default=5000,
+                        help='Finetuning iterations (default: 5000)')
+    parser.add_argument('--lr', type=float, default=1e-5,
+                        help='Learning rate for finetuning (default: 1e-5)')
+    parser.add_argument('--val_split', type=float, default=0.1,
+                        help='Validation split ratio (default: 0.1)')
+    parser.add_argument('--batch_size', type=int, default=16,
+                        help='Batch size (default: 16)')
+    parser.add_argument('--log_interval', type=int, default=50,
+                        help='Log loss every N iterations (default: 50)')
+    parser.add_argument('--save_interval', type=int, default=1000,
+                        help='Save checkpoint every N iterations (default: 1000)')
+    parser.add_argument('--val_interval', type=int, default=100,
+                        help='Validation loss calculation interval (default: 100)')
     return parser.parse_args()
+
 
 # variables
 seed = 42
@@ -74,9 +74,11 @@ pdn_transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
+
 def train_transform(image):
     image = grayscale_transform(image)
     return extractor_transform(image), pdn_transform(image)
+
 
 def main():
     torch.manual_seed(seed)
@@ -85,10 +87,12 @@ def main():
 
     config = get_argparse()
     model_size = config.model_size
-    imagenet_train_path = config.data_path
 
-    os.makedirs(config.output_folder, exist_ok=True)
+    # Output folder (per class)
+    output_folder = os.path.join(config.output_folder, config.subdataset)
+    os.makedirs(output_folder, exist_ok=True)
 
+    # Backbone (Teacher - Fixed)
     backbone = torchvision.models.wide_resnet101_2(
         weights=Wide_ResNet101_2_Weights.IMAGENET1K_V1)
 
@@ -97,195 +101,163 @@ def main():
                                  device=device,
                                  input_shape=(3, 512, 512))
 
+    # PDN (Student - To be finetuned)
     if model_size == 'small':
         pdn = get_pdn_small(out_channels, padding=True)
     elif model_size == 'medium':
         pdn = get_pdn_medium(out_channels, padding=True)
+    elif model_size == 'small_DWS':
+        pdn = get_pdn_small_dws_small(out_channels, padding=False)
     elif model_size == 'small_bottleneck':
         pdn = get_pdn_small_bottleneck(out_channels, padding=False, bottleneck_ratio=config.bottleneck_ratio)
+    elif model_size == 'small_bottleneckfix':
+        pdn = get_pdn_small_bottleneckfix(out_channels, padding=False, bottleneck_ratio=config.bottleneck_ratio)
+    elif model_size == 'ghostnet':
+        pdn = get_pdn_ghost_simple(out_channels, padding=False)
     else:
         raise Exception(f'Unknown model_size: {model_size}')
 
-    # 訓練データローダー
-    train_set = ImageFolderWithoutTarget(imagenet_train_path,
-                                         transform=train_transform)
-    train_loader = DataLoader(train_set, batch_size=32, shuffle=True,
-                              num_workers=8, pin_memory=True)
-    train_loader = InfiniteDataloader(train_loader)
+    # Load pretrained weights
+    print(f'Loading pretrained weights from {config.pretrained_weights}')
+    ckpt = torch.load(config.pretrained_weights, map_location='cpu')
+    if isinstance(ckpt, dict) and 'model_state_dict' in ckpt:
+        pdn.load_state_dict(ckpt['model_state_dict'])
+    else:
+        pdn.load_state_dict(ckpt)
+    print('Pretrained weights loaded successfully')
 
-    # 検証データローダー（別フォルダから読み込み）
-    val_set = ImageFolderWithoutTarget(config.val_path,
-                                       transform=train_transform)
-    val_loader = DataLoader(val_set, batch_size=32, shuffle=False,
-                            num_workers=8, pin_memory=True)
+    # Data Loading
+    mvtec_path = os.path.join(config.mvtec_ad_path, config.subdataset, 'train')
+    if not os.path.exists(mvtec_path):
+        raise Exception(f'MVTec path not found: {mvtec_path}')
 
-    print(f'Train set: {len(train_set)} images')
-    print(f'Validation set: {len(val_set)} images')
+    full_train_set = ImageFolderWithoutTarget(mvtec_path, transform=train_transform)
 
+    # Split train/val
+    train_size = int((1 - config.val_split) * len(full_train_set))
+    val_size = len(full_train_set) - train_size
+    rng = torch.Generator().manual_seed(seed)
+    train_set, val_set = torch.utils.data.random_split(full_train_set, [train_size, val_size], generator=rng)
+
+    train_loader = DataLoader(train_set, batch_size=config.batch_size, shuffle=True,
+                              num_workers=4, pin_memory=True, drop_last=True)
+    train_loader_infinite = InfiniteDataloader(train_loader)
+
+    val_loader = DataLoader(val_set, batch_size=config.batch_size, shuffle=False,
+                           num_workers=4, pin_memory=True)
+
+    print(f'Train set: {train_size} images')
+    print(f'Validation set: {val_size} images')
+
+    # Normalization stats calculation on MVTec-2 data
+    print('Computing feature normalization statistics on MVTec-2 data...')
     channel_mean, channel_std = feature_normalization(extractor=extractor,
                                                       train_loader=train_loader)
 
     pdn.train()
     if on_gpu:
         pdn = pdn.cuda()
+        channel_mean = channel_mean.cuda()
+        channel_std = channel_std.cuda()
 
-    optimizer = torch.optim.Adam(pdn.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(pdn.parameters(), lr=config.lr, weight_decay=1e-5)
 
-    # 学習率スケジューラ（2000刻みで1/10に減衰）
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
+    # Scheduler (reduce LR at 95% of training)
+    scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
-        milestones=[2000, 4000, 6000, 8000],  # 2000刻みで減衰
-        gamma=0.1  # 各マイルストーンで1/10に減衰
+        step_size=int(0.95 * config.iterations),
+        gamma=0.1
     )
 
-    # チェックポイントから再開
-    start_iteration = 0
-    if config.resume:
-        if config.resume_iter is None:
-            raise ValueError('--resume_iter is required when using --resume')
-        print(f'Loading checkpoint from {config.resume}')
-        checkpoint = torch.load(config.resume)
+    # Logging
+    ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size in ['small_bottleneck', 'small_bottleneckfix'] else ''
+    log_file = os.path.join(output_folder, f'training_log{ratio_suffix}.csv')
+    val_log_file = os.path.join(output_folder, f'validation_log{ratio_suffix}.csv')
 
-        # モデルのみの場合（後方互換性）
-        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-            pdn.load_state_dict(checkpoint['model_state_dict'])
-            if 'optimizer_state_dict' in checkpoint:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            if 'scheduler_state_dict' in checkpoint:
-                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        else:
-            # 古い形式（state_dictのみ）
-            pdn.load_state_dict(checkpoint)
+    with open(log_file, 'w', newline='') as f:
+        csv.writer(f).writerow(['iteration', 'train_loss'])
+    with open(val_log_file, 'w', newline='') as f:
+        csv.writer(f).writerow(['iteration', 'val_loss'])
 
-        start_iteration = config.resume_iter
-        # スケジューラを正しいステップまで進める
-        for _ in range(start_iteration):
-            scheduler.step()
-        print(f'Resuming from iteration {start_iteration}, LR: {scheduler.get_last_lr()[0]:.2e}')
-
-    # ログファイルの準備
-    ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
-    log_file = os.path.join(config.output_folder, f'training_log{ratio_suffix}.csv')
-    val_log_file = os.path.join(config.output_folder, f'validation_log{ratio_suffix}.csv')
-
-    # 新規作成または追記モード
-    if start_iteration == 0:
-        with open(log_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['iteration', 'train_loss'])
-        with open(val_log_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['iteration', 'val_loss'])
-    elif not os.path.exists(log_file):
-        print(f'Warning: log file {log_file} not found. Creating new log file.')
-        with open(log_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['iteration', 'train_loss'])
-        with open(val_log_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['iteration', 'val_loss'])
-
-    # Early stopping用変数
-    best_loss = float('inf')
-    no_improvement_count = 0
-
-    tqdm_obj = tqdm(range(start_iteration, config.epochs))
-    for iteration, (image_fe, image_pdn) in zip(tqdm_obj, train_loader):
+    # Training Loop
+    print(f'Starting finetuning for {config.iterations} iterations...')
+    tqdm_obj = tqdm(range(config.iterations))
+    for iteration, (image_fe, image_pdn) in zip(tqdm_obj, train_loader_infinite):
         if on_gpu:
             image_fe = image_fe.cuda()
             image_pdn = image_pdn.cuda()
+
         target = extractor.embed(image_fe)
         target = (target - channel_mean) / channel_std
         prediction = pdn(image_pdn)
         prediction = F.interpolate(prediction, size=(64, 64), mode='bilinear', align_corners=False)
+
+        # MSE Loss (same as pretraining)
         loss = torch.mean((target - prediction)**2)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        scheduler.step()  # 学習率スケジューラを更新
+        scheduler.step()
 
         current_lr = scheduler.get_last_lr()[0]
         tqdm_obj.set_description(f'Loss: {loss.item():.6f}, LR: {current_lr:.2e}')
 
-        # ログ記録
+        # Logging
         if iteration % config.log_interval == 0:
             with open(log_file, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([iteration, loss.item()])
+                csv.writer(f).writerow([iteration, loss.item()])
 
-        # 検証ロス計算（定期的に）
+        # Validation
         if iteration % config.val_interval == 0 and iteration > 0:
-            val_loss = compute_validation_loss(
-                pdn, val_loader, extractor, channel_mean, channel_std,
-                max_batches=config.val_batches
-            )
+            val_loss = compute_validation_loss(pdn, val_loader, extractor, channel_mean, channel_std)
             with open(val_log_file, 'a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow([iteration, val_loss])
+                csv.writer(f).writerow([iteration, val_loss])
             tqdm_obj.write(f'Iteration {iteration}: Train Loss = {loss.item():.6f}, Val Loss = {val_loss:.6f}')
 
-            # Early stopping チェック（validation lossベース、patience > 0の場合のみ）
-            if config.early_stopping_patience > 0:
-                if val_loss < best_loss:
-                    best_loss = val_loss
-                    no_improvement_count = 0
-                else:
-                    no_improvement_count += config.val_interval
-
-                if no_improvement_count >= config.early_stopping_patience:
-                    tqdm_obj.write(f'Early stopping at iteration {iteration}. No improvement for {config.early_stopping_patience} iterations.')
-                    break
-
-        # チェックポイント保存
+        # Checkpoint Save
         if iteration % config.save_interval == 0 and iteration > 0:
             checkpoint = {
                 'model_state_dict': pdn.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
-                'iteration': iteration
+                'iteration': iteration,
+                'channel_mean': channel_mean,  # Essential for inference
+                'channel_std': channel_std     # Essential for inference
             }
-            # 完全なチェックポイント（再開用）
             torch.save(checkpoint,
-                       os.path.join(config.output_folder,
-                                    f'teacher_{model_size}{ratio_suffix}_iter_{iteration}_checkpoint.pth'))
-            # モデルのみ（互換性のため残す）
-            torch.save(pdn,
-                       os.path.join(config.output_folder,
-                                    f'teacher_{model_size}{ratio_suffix}_iter_{iteration}.pth'))
-            torch.save(pdn.state_dict(),
-                       os.path.join(config.output_folder,
-                                    f'teacher_{model_size}{ratio_suffix}_iter_{iteration}_state.pth'))
+                       os.path.join(output_folder,
+                                    f'teacher_{model_size}_{config.subdataset}{ratio_suffix}_iter_{iteration}_checkpoint.pth'))
 
-    # 最終モデル保存
+    # Final Save
     checkpoint = {
         'model_state_dict': pdn.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'scheduler_state_dict': scheduler.state_dict(),
-        'iteration': iteration
+        'iteration': config.iterations,
+        'channel_mean': channel_mean,  # Essential for inference
+        'channel_std': channel_std     # Essential for inference
     }
-    torch.save(checkpoint,
-               os.path.join(config.output_folder,
-                            f'teacher_{model_size}{ratio_suffix}_final_checkpoint.pth'))
-    torch.save(pdn,
-               os.path.join(config.output_folder,
-                            f'teacher_{model_size}{ratio_suffix}_final.pth'))
+
+    final_ckpt_path = os.path.join(output_folder, f'teacher_{model_size}_{config.subdataset}{ratio_suffix}_final.pth')
+    torch.save(checkpoint, final_ckpt_path)
+
+    # Also save state_dict only for compatibility
     torch.save(pdn.state_dict(),
-               os.path.join(config.output_folder,
-                            f'teacher_{model_size}{ratio_suffix}_final_state.pth'))
+               os.path.join(output_folder,
+                            f'teacher_{model_size}_{config.subdataset}{ratio_suffix}_final_state.pth'))
 
-    # loss曲線をプロット
-    plot_loss_curve(log_file, val_log_file, config.output_folder, ratio_suffix)
-
-    print(f'\nTraining completed!')
+    plot_loss_curve(log_file, val_log_file, output_folder, ratio_suffix)
+    print(f'\nFinetuning completed!')
+    print(f'Model saved to: {final_ckpt_path}')
     print(f'Log file: {log_file}')
-    print(f'Loss curve: {os.path.join(config.output_folder, f"loss_curve{ratio_suffix}.png")}')
+    print(f'Loss curve: {os.path.join(output_folder, f"loss_curve{ratio_suffix}.png")}')
 
 
 def plot_loss_curve(log_file, val_log_file, output_folder, ratio_suffix):
-    """訓練ロスと検証ロスを同時にプロット"""
+    """Plot training and validation loss curves"""
     try:
-        # 訓練ロスを読み込み
+        # Training loss
         train_iterations = []
         train_losses = []
         with open(log_file, 'r') as f:
@@ -294,7 +266,7 @@ def plot_loss_curve(log_file, val_log_file, output_folder, ratio_suffix):
                 train_iterations.append(int(row['iteration']))
                 train_losses.append(float(row['train_loss']))
 
-        # 検証ロスを読み込み
+        # Validation loss
         val_iterations = []
         val_losses = []
         if os.path.exists(val_log_file):
@@ -304,7 +276,7 @@ def plot_loss_curve(log_file, val_log_file, output_folder, ratio_suffix):
                     val_iterations.append(int(row['iteration']))
                     val_losses.append(float(row['val_loss']))
 
-        # プロット
+        # Plot
         plt.figure(figsize=(12, 6))
         plt.plot(train_iterations, train_losses, linewidth=1.5, label='Training Loss', alpha=0.7, color='blue')
 
@@ -314,12 +286,11 @@ def plot_loss_curve(log_file, val_log_file, output_folder, ratio_suffix):
 
         plt.xlabel('Iteration', fontsize=12)
         plt.ylabel('Loss', fontsize=12)
-        plt.title('Training and Validation Loss Curve', fontsize=14)
+        plt.title('Finetuning Loss Curve', fontsize=14)
         plt.legend(fontsize=11, loc='upper right')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
 
-        # 保存
         plot_path = os.path.join(output_folder, f'loss_curve{ratio_suffix}.png')
         plt.savefig(plot_path, dpi=150)
         plt.close()
@@ -329,8 +300,30 @@ def plot_loss_curve(log_file, val_log_file, output_folder, ratio_suffix):
 
 
 @torch.no_grad()
-def feature_normalization(extractor, train_loader, steps=10000):
+def compute_validation_loss(pdn, val_loader, extractor, channel_mean, channel_std):
+    """Compute validation loss"""
+    pdn.eval()
+    val_losses = []
 
+    for (image_fe, image_pdn) in val_loader:
+        if on_gpu:
+            image_fe = image_fe.cuda()
+            image_pdn = image_pdn.cuda()
+
+        target = extractor.embed(image_fe)
+        target = (target - channel_mean) / channel_std
+        prediction = pdn(image_pdn)
+        prediction = F.interpolate(prediction, size=(64, 64), mode='bilinear', align_corners=False)
+        loss = torch.mean((target - prediction)**2)
+        val_losses.append(loss.item())
+
+    pdn.train()
+    return np.mean(val_losses)
+
+
+@torch.no_grad()
+def feature_normalization(extractor, train_loader, steps=1000):
+    """Compute feature normalization statistics on MVTec-2 data"""
     mean_outputs = []
     normalization_count = 0
     with tqdm(desc='Computing mean of features', total=steps) as pbar:
@@ -372,31 +365,7 @@ def feature_normalization(extractor, train_loader, steps=10000):
     return channel_mean, channel_std
 
 
-@torch.no_grad()
-def compute_validation_loss(pdn, val_loader, extractor, channel_mean, channel_std, max_batches=100):
-    """検証データでのロスを計算"""
-    pdn.eval()
-    val_losses = []
-
-    for i, (image_fe, image_pdn) in enumerate(val_loader):
-        if i >= max_batches:
-            break
-
-        if on_gpu:
-            image_fe = image_fe.cuda()
-            image_pdn = image_pdn.cuda()
-
-        target = extractor.embed(image_fe)
-        target = (target - channel_mean) / channel_std
-        prediction = pdn(image_pdn)
-        prediction = F.interpolate(prediction, size=(64, 64), mode='bilinear', align_corners=False)
-        loss = torch.mean((target - prediction)**2)
-        val_losses.append(loss.item())
-
-    pdn.train()
-    return np.mean(val_losses)
-
-
+# FeatureExtractor and related classes (from pretraining.py)
 class FeatureExtractor(torch.nn.Module):
     def __init__(self, backbone, layers_to_extract_from, device, input_shape):
         super(FeatureExtractor, self).__init__()
@@ -417,9 +386,7 @@ class FeatureExtractor(torch.nn.Module):
         self.forward_modules["preprocessing"] = preprocessing
 
         preadapt_aggregator = Aggregator(target_dim=out_channels)
-
         _ = preadapt_aggregator.to(self.device)
-
         self.forward_modules["preadapt_aggregator"] = preadapt_aggregator
 
         self.forward_modules.eval()
@@ -427,15 +394,13 @@ class FeatureExtractor(torch.nn.Module):
     @torch.no_grad()
     def embed(self, images):
         """Returns feature embeddings for images."""
-
         _ = self.forward_modules["feature_aggregator"].eval()
         features = self.forward_modules["feature_aggregator"](images)
 
         features = [features[layer] for layer in self.layers_to_extract_from]
 
         features = [
-            self.patch_maker.patchify(x, return_spatial_info=True) for x in
-            features
+            self.patch_maker.patchify(x, return_spatial_info=True) for x in features
         ]
         patch_shapes = [x[1] for x in features]
         features = [x[0] for x in features]
@@ -463,13 +428,10 @@ class FeatureExtractor(torch.nn.Module):
                 *perm_base_shape[:-2], ref_num_patches[0], ref_num_patches[1]
             )
             _features = _features.permute(0, -2, -1, 1, 2, 3)
-            _features = _features.reshape(len(_features), -1,
-                                          *_features.shape[-3:])
+            _features = _features.reshape(len(_features), -1, *_features.shape[-3:])
             features[i] = _features
         features = [x.reshape(-1, *x.shape[-3:]) for x in features]
 
-        # As different feature backbones & patching provide differently
-        # sized features, these are brought into the correct form here.
         features = self.forward_modules["preprocessing"](features)
         features = self.forward_modules["preadapt_aggregator"](features)
         features = torch.reshape(features, (-1, 64, 64, out_channels))
@@ -478,31 +440,21 @@ class FeatureExtractor(torch.nn.Module):
         return features
 
 
-# Image handling classes.
 class PatchMaker:
     def __init__(self, patchsize, stride=None):
         self.patchsize = patchsize
         self.stride = stride
 
     def patchify(self, features, return_spatial_info=False):
-        """Convert a tensor into a tensor of respective patches.
-        Args:
-            x: [torch.Tensor, bs x c x w x h]
-        Returns:
-            x: [torch.Tensor, bs * w//stride * h//stride, c, patchsize,
-            patchsize]
-        """
+        """Convert a tensor into a tensor of respective patches."""
         padding = int((self.patchsize - 1) / 2)
         unfolder = torch.nn.Unfold(
-            kernel_size=self.patchsize, stride=self.stride, padding=padding,
-            dilation=1
+            kernel_size=self.patchsize, stride=self.stride, padding=padding, dilation=1
         )
         unfolded_features = unfolder(features)
         number_of_total_patches = []
         for s in features.shape[-2:]:
-            n_patches = (
-                                s + 2 * padding - 1 * (self.patchsize - 1) - 1
-                        ) / self.stride + 1
+            n_patches = (s + 2 * padding - 1 * (self.patchsize - 1) - 1) / self.stride + 1
             number_of_total_patches.append(int(n_patches))
         unfolded_features = unfolded_features.reshape(
             *features.shape[:2], self.patchsize, self.patchsize, -1
@@ -539,8 +491,7 @@ class MeanMapper(torch.nn.Module):
 
     def forward(self, features):
         features = features.reshape(len(features), 1, -1)
-        return F.adaptive_avg_pool1d(features,
-                                     self.preprocessing_dim).squeeze(1)
+        return F.adaptive_avg_pool1d(features, self.preprocessing_dim).squeeze(1)
 
 
 class Aggregator(torch.nn.Module):
@@ -550,7 +501,6 @@ class Aggregator(torch.nn.Module):
 
     def forward(self, features):
         """Returns reshaped and average pooled features."""
-        # batchsize x number_of_layers x input_dim -> batchsize x target_dim
         features = features.reshape(len(features), 1, -1)
         features = F.adaptive_avg_pool1d(features, self.target_dim)
         return features.reshape(len(features), -1)
@@ -561,15 +511,6 @@ class NetworkFeatureAggregator(torch.nn.Module):
 
     def __init__(self, backbone, layers_to_extract_from, device):
         super(NetworkFeatureAggregator, self).__init__()
-        """Extraction of network features.
-
-        Runs a network only to the last layer of the list of layers where
-        network features should be extracted from.
-
-        Args:
-            backbone: torchvision.model
-            layers_to_extract_from: [list of str]
-        """
         self.layers_to_extract_from = layers_to_extract_from
         self.backbone = backbone
         self.device = device
@@ -590,8 +531,7 @@ class NetworkFeatureAggregator(torch.nn.Module):
                     extract_idx = int(extract_idx)
                     network_layer = network_layer[extract_idx]
                 else:
-                    network_layer = network_layer.__dict__["_modules"][
-                        extract_idx]
+                    network_layer = network_layer.__dict__["_modules"][extract_idx]
             else:
                 network_layer = backbone.__dict__["_modules"][extract_layer]
 
@@ -608,8 +548,6 @@ class NetworkFeatureAggregator(torch.nn.Module):
     def forward(self, images):
         self.outputs.clear()
         with torch.no_grad():
-            # The backbone will throw an Exception once it reached the last
-            # layer to compute features from. Computation will stop there.
             try:
                 _ = self.backbone(images)
             except LastLayerToExtractReachedException:
@@ -620,8 +558,7 @@ class NetworkFeatureAggregator(torch.nn.Module):
         """Computes the feature dimensions for all layers given input_shape."""
         _input = torch.ones([1] + list(input_shape)).to(self.device)
         _output = self(_input)
-        return [_output[layer].shape[1] for layer in
-                self.layers_to_extract_from]
+        return [_output[layer].shape[1] for layer in self.layers_to_extract_from]
 
 
 class ForwardHook:
@@ -642,20 +579,6 @@ class ForwardHook:
 class LastLayerToExtractReachedException(Exception):
     pass
 
-import sys
-sys.argv = [
-    'train.py',
-    '-d', '/content/data/train',
-    '--val_path', '/content/data/val',  # 検証データのパス
-    '-o', '/content/output/bottle0.6_20000epoch',  # フォルダ名にカンマは使えない
-    '-m', 'small_bottleneck',  # small_bottleneck に修正
-    '--bottleneck_ratio', '0.6',  # bottleneck比率を指定
-    '--epochs', '20000',
-    '--save_interval', '5000',  # 5000に変更推奨（500だと多すぎ）
-    '--log_interval', '100',
-    '--val_interval', '1000',  # 1000イテレーションごとに検証ロス計算
-    '--val_batches', '100'  # 検証は100バッチのみ使用
-]
 
-# 実行
-main()
+if __name__ == '__main__':
+    main()

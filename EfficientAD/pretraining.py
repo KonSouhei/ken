@@ -17,7 +17,7 @@ import matplotlib
 matplotlib.use('Agg')  # GUIなし環境用
 import matplotlib.pyplot as plt
 from common import (get_pdn_small, get_pdn_medium,get_pdn_small_bottleneck,get_pdn_small_dws_small,
-                    get_pdn_ghost_simple, ImageFolderWithoutTarget, InfiniteDataloader)
+                    get_pdn_ghost_simple, get_pdn_small_bottleneckfix, ImageFolderWithoutTarget, InfiniteDataloader)
 
 
 def get_argparse():
@@ -107,6 +107,8 @@ def main():
         pdn = get_pdn_small_dws_small(out_channels, padding=False)
     elif model_size == 'small_bottleneck':
         pdn = get_pdn_small_bottleneck(out_channels, padding=False, bottleneck_ratio=config.bottleneck_ratio)
+    elif model_size == 'small_bottleneckfix':
+        pdn = get_pdn_small_bottleneckfix(out_channels, padding=False, bottleneck_ratio=config.bottleneck_ratio)
     elif model_size == 'ghostnet':
         pdn = get_pdn_ghost_simple(out_channels, padding=False)
     else:
@@ -170,7 +172,7 @@ def main():
         print(f'Resuming from iteration {start_iteration}, LR: {scheduler.get_last_lr()[0]:.2e}')
 
     # ログファイルの準備
-    ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size == 'small_bottleneck' else ''
+    ratio_suffix = f'_ratio{config.bottleneck_ratio}' if model_size in ['small_bottleneck', 'small_bottleneckfix'] else ''
     log_file = os.path.join(config.output_folder, f'training_log{ratio_suffix}.csv')
     val_log_file = os.path.join(config.output_folder, f'validation_log{ratio_suffix}.csv')
 

@@ -3,15 +3,15 @@
 
 # 共通パラメータ
 $DATASET = "mvtec_ad"
-$MODEL_SIZE = "dws"
+$MODEL_SIZE = "ghostnet"
 $BOTTLENECK_RATIO = 1.0
-$TEACHER_WEIGHTS = "models/teacher_small_DWS_final_state.pth"
+$TEACHER_WEIGHTS = "models/teacher_ghostnet_final_state.pth"
 $MVTEC_PATH = "mvtec-2"
 $IMAGENET_PATH = "archive/train"
 $TRAIN_STEPS = 20000
 
 # サブデータセットのリスト（全15カテゴリ）
-$SUBDATASETS = @("bottle", "cable", "capsule", "carpet", "grid", "hazelnut", "leather", "metal_nut", "pill", "screw", "tile", "toothbrush", "transistor", "wood", "zipper")
+$SUBDATASETS = @("capsule")
 
 Write-Host "========================================"
 Write-Host "EfficientAD Multi-Dataset Training"
@@ -33,7 +33,7 @@ foreach ($SUBDATASET in $SUBDATASETS) {
     Write-Host "Training: $SUBDATASET"
     Write-Host "========================================"
 
-    $OUTPUT_DIR = "output/dws15"
+    $OUTPUT_DIR = "output/gostssssss"
 
     # 訓練実行
     python efficientad.py `
@@ -74,7 +74,7 @@ Write-Host "Total time: ${HOURS}h ${MINUTES}m"
 Write-Host ""
 Write-Host "Results:"
 foreach ($SUBDATASET in $SUBDATASETS) {
-    $OUTPUT_DIR = "output/dws15"
+    $OUTPUT_DIR = "output/gostss"
     Write-Host "  - ${SUBDATASET}: $OUTPUT_DIR"
 }
 Write-Host "========================================"

@@ -151,6 +151,9 @@ def main():
     elif config.model_size == 'bottleneck':
         teacher = get_pdn_small_bottleneck(out_channels, bottleneck_ratio=config.bottleneck_ratio)
         student = get_pdn_small_bottleneck(2 * out_channels, bottleneck_ratio=config.bottleneck_ratio)
+    elif config.model_size == 'bottleneckfix':
+        teacher = get_pdn_small_bottleneckfix(out_channels, bottleneck_ratio=config.bottleneck_ratio)
+        student = get_pdn_small_bottleneckfix(2 * out_channels, bottleneck_ratio=config.bottleneck_ratio)
     elif config.model_size == 'dws':
         teacher = get_pdn_small_dws_small(out_channels)
         student = get_pdn_small_dws_small(2 * out_channels)

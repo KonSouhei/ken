@@ -3,13 +3,13 @@
 
 # パラメータ
 $MODEL_SIZE = "ghostnet"
-$DATA_PATH = "ILSVRC/Data/CLS-LOC/train"
+$DATA_PATH = "/archive/train"
 $VAL_PATH = "archive/val.X"
 $OUTPUT_DIR = "output/pretraining/ghostnet"
-$EPOCHS = 60000
-$SAVE_INTERVAL = 10000
+$EPOCHS = 5000
+$SAVE_INTERVAL = 1000
 $LOG_INTERVAL = 100
-$VAL_INTERVAL = 1000
+$VAL_INTERVAL = 500
 
 Write-Host "========================================"
 Write-Host "GhostNet Teacher Pre-training"
